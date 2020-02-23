@@ -2,7 +2,9 @@ import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 import os
-import sys
+import h5py
+import cv2
+import numpy as np
 
 model_urls = {
     'imagenet': 'http://webia.lip6.fr/~cadene/Downloads/inceptionv4-97ef9c30.pth'
@@ -373,6 +375,31 @@ def load():
 ## Test
 ######################################################################
 
+def preprocess_img(img, output_size=299):
+    # BGR 2 RGB
+    img = img[:,:,::-1]
+    # resize
+    origin_shape = img.shape[:2]
+    if max(origin_shape) != output_size:
+        resize_f = max(origin_shape) * 1.0 / output_size
+        H, W = int(img.shape[0] / resize_f), int(img.shape[1] / resize_f)
+        img = cv2.resize(img, (W, H))
+    H, W = img.shape[:2]
+    h_offset = (output_size - H) // 2
+    w_offset = (output_size - W) // 2
+    image = np.zeros(shape=(output_size, output_size, 3), dtype=np.uint8)
+    image[h_offset:H + h_offset, w_offset:W + w_offset] = img
+    # normalise
+    image = image.astype(dtype=np.float32)/256.0
+    image = 2 * (image - 0.5)
+    # to tensor
+    image = torch.from_numpy(image)
+    image = image.unsqueeze(dim=0)
+    image.transpose_(1, 3)
+    image.transpose_(2, 3)
+    # print(image.size())
+    return image
+
 def test(model):
     model.eval()
     from scipy import misc
@@ -387,7 +414,9 @@ def test(model):
     outputs_tf = torch.from_numpy(h5f['out'][()])
     h5f.close()
     outputs = torch.nn.functional.softmax(outputs)
-    print(torch.dist(outputs.data, outputs_tf))
+    print(outputs.data)
+    print(outputs_tf)
+    # print(torch.dist(outputs.data, outputs_tf))
     return outputs
  
 def test_conv2d(module, name):
@@ -413,11 +442,22 @@ def test_mixed_4a_7a(module, name):
 ## Main
 ######################################################################
 
-if __name__ == "__main__":
+def main():
 
-    import h5py
+    import argparse
 
-    model = InceptionV4()
+    parser = argparse.ArgumentParser("Load inception-v4 in pytorch using parameters "
+                                     "in h5 files after running tensorflow_dumpy.py")
+
+    parser.add_argument('-n', '--num_classes', type=int, default=1001,
+                        help='The classification numbers in the ckpt model')
+
+    args = parser.parse_args()
+
+    num_classes = args.num_classes
+
+    # load pytorch version's parameters fron h5 files
+    model = InceptionV4(num_classes=num_classes)
     state_dict = load()
     model.load_state_dict(state_dict)
 
@@ -426,11 +466,31 @@ if __name__ == "__main__":
     # test_conv2d(model.features[2], 'Conv2d_2b_3x3')
     # test_conv2d(model.features[3].conv, 'Mixed_3a/Branch_1/Conv2d_0a_3x3')
     # test_mixed_4a_7a(model.features[4], 'Mixed_4a')
-    
+
+    # save the pt version of inception-v4
     os.system('mkdir -p save')
     torch.save(model, 'save/inceptionv4.pth')
-    torch.save(state_dict, 'save/inceptionv4_state.pth')
+    model_pth = {'state_dict': state_dict, 'num_classes': num_classes, 'arch': 'inception-v4'}
+    torch.save(model_pth, 'save/inceptionv4.pth.tar')
 
+    # verify the ouput between tf and pt
     outputs = test(model)
 
+    # infer other images with preprocessing
+    crop_dir = '/home/zyl/img_src/sku_classify/IneTest/crops/68'
+    for name_i in os.listdir(crop_dir)[:20]:
+        img = cv2.imread(os.path.join(crop_dir, name_i), 1)
+        image = preprocess_img(img)
+        outputs = model.forward(image)
+        _, pred = outputs.data.topk(1, 1, True, True)
+        predict_label = pred.squeeze().item()
 
+        softmax = torch.nn.Softmax()
+        scores = softmax(outputs).squeeze().tolist()
+
+        print(scores)
+        print(predict_label)
+
+
+if __name__ == "__main__":
+    main()

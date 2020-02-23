@@ -1,17 +1,22 @@
 # python3
+"""
+This script dumps the model parameters of tf-inception-v4 into h5 files before reconstructing
+the pytorch version, the h5 files are saved in ./dump/
+"""
+
 
 # TensorBoard
 # python3 ~/.local/lib/python3.5/site-packages/tensorflow/tensorboard/tensorboard.py --logdir=logs --port=6007
 
+import argparse
 import os
 import sys
 import h5py
 import math
-import urllib.request
 import numpy as np
 import tensorflow as tf
 
-sys.path.append('models/slim')
+sys.path.append('/opt/models/research/slim') # here the models is cloned from the official repo of tensorflow/models/
 from datasets import dataset_utils
 from datasets import imagenet
 from nets import inception
@@ -22,7 +27,27 @@ slim = tf.contrib.slim
 image_size = inception.inception_v3.default_image_size
 
 url = 'http://download.tensorflow.org/models/inception_v4_2016_09_09.tar.gz'
-checkpoints_dir = '/tmp/checkpoints/'
+
+
+
+parser = argparse.ArgumentParser("Transforma tf inception v4 to pytorch version, the tf version's "
+                                 "network is defined in the official repo of tensorflow models")
+
+parser.add_argument('-cd', '--checkpoints_dir', type=str, required=True,
+                    help='A directory containing ckpt file: '
+                         'inceptionv4-model.ckpt.data-00000-of-00001,'
+                         'inceptionv4-model.ckpt.index,'
+                         'inceptionv4-model.ckpt.meta')
+parser.add_argument('-n', '--num_classes', type=int, default=1001,
+                    help='The classification numbers in the ckpt model')
+
+args = parser.parse_args()
+
+checkpoints_dir = args.checkpoints_dir
+num_classes = args.num_classes
+
+# checkpoints_dir = '/home/zyl/self-repos/tensorflow-model-zoo.torch/chinadrink_0214_models'
+# num_classes = 4384
 
 def make_padding(padding_name, conv_shape):
   padding_name = padding_name.decode("utf-8")
@@ -151,9 +176,9 @@ def dump_mixed_7(name='Mixed_7b'):
   dump_conv2d(name=name+'/Branch_3/Conv2d_0b_1x1')
 
 
-if not tf.gfile.Exists(checkpoints_dir+'inception_v4.ckpt'):
-  tf.gfile.MakeDirs(checkpoints_dir)
-  dataset_utils.download_and_uncompress_tarball(url, checkpoints_dir)
+# if not tf.gfile.Exists(checkpoints_dir+'inception_v4.ckpt'):
+#   tf.gfile.MakeDirs(checkpoints_dir)
+#   dataset_utils.download_and_uncompress_tarball(url, checkpoints_dir)
 
 with tf.Graph().as_default():
 
@@ -166,16 +191,16 @@ with tf.Graph().as_default():
   inputs = np.zeros((1,299,299,3), dtype=np.float32)
 
   inputs[0] = img
-  inputs = tf.pack(inputs)
+  inputs = tf.stack(inputs)
 
   with slim.arg_scope(inception.inception_v4_arg_scope()):
-    logits, _ = inception.inception_v4(inputs, num_classes=1001, is_training=False)
+    logits, _ = inception.inception_v4(inputs, num_classes=num_classes, is_training=False)
 
   with tf.Session() as sess:
 
     # Initialize model
     init_fn = slim.assign_from_checkpoint_fn(
-    os.path.join(checkpoints_dir, 'inception_v4.ckpt'),
+    os.path.join(checkpoints_dir, 'china-drink-sku_20200214_model.ckpt-200000'),
     slim.get_model_variables('InceptionV4'))  
 
     init_fn(sess)
@@ -188,9 +213,9 @@ with tf.Graph().as_default():
     os.system("rm -rf logs")
     os.system("mkdir -p logs")
 
-    tf.scalar_summary('logs', logits[0][0])
-    summary_op = tf.merge_all_summaries()
-    summary_writer = tf.train.SummaryWriter("logs", sess.graph)
+    tf.summary.scalar('logs', logits[0][0])
+    summary_op = tf.summary.merge_all()
+    summary_writer = tf.summary.FileWriter("logs", sess.graph)
 
     out = sess.run(summary_op)
     summary_writer.add_summary(out, 0)
